@@ -17,6 +17,7 @@
 
 local core    = require("apisix.core")
 local ngx_re  = require("ngx.re")
+local url     = require("net.url")
 local openidc = require("resty.openidc")
 local random  = require("resty.random")
 local string  = string
@@ -340,13 +341,28 @@ function _M.rewrite(plugin_conf, ctx)
             unauth_action = "deny"
         end
 
+        -- Let clients trigger reauthorization manually. This is useful when
+        -- some information stored in the token has changed, and the client
+        -- needs the changes to be reflected immediately.
+        local target_uri = nil
+        if ngx.var.arg_force_reauthorize == "true" then
+            conf.force_reauthorize = true
+
+            -- Specify the redirect uri manually. Remove the query param
+            -- force_reauthorize.
+            local decoded_uri = url.parse(ngx.var.request_uri)
+            decoded_uri.query.force_reauthorize = nil
+            target_uri = url.build(decoded_uri)
+        end
+
         -- Authenticate the request. This will validate the access token if it
         -- is stored in a session cookie, and also renew the token if required.
         -- If no token can be extracted, the response will redirect to the ID
         -- provider's authorization endpoint to initiate the Relying Party flow.
         -- This code path also handles when the ID provider then redirects to
         -- the configured redirect URI after successful authentication.
-        response, err, _, session  = openidc.authenticate(conf, nil, unauth_action, conf.session)
+        response, err, _, session  = openidc.authenticate(conf, target_uri, unauth_action,
+                                                          conf.session)
 
         if err then
             if err == "unauthorized request" then
